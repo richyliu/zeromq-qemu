@@ -15,9 +15,14 @@ int main (void)
         return 1;
     }
 
+    sleep(2);
+
+    int idx = 0;
     while (1) {
-        printf("Sending Hello\n");
-        zmq_send(publisher, "Hello", 5, 0);
+        char buf[100];
+        sprintf(buf, "Hello %d", idx++);
+        printf("Sending message: '%s'\n", buf);
+        zmq_send(publisher, buf, strlen(buf), 0);
         sleep(1);
     }
 

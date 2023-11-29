@@ -4,7 +4,7 @@
 
 Run `make`. You will need `arm-none-eabi` GNU build tools. This generates a `main.bin`, which can be ran with QEMU:
 ``` sh
-qemu-system-arm -gdb tcp::2159 -M vexpress-a9 -m 32M -no-reboot -nographic -monitor telnet:127.0.0.1:1234,server,nowait -kernel main.bin
+qemu-system-arm -gdb tcp::2159 -M versatilepb -m 32M -no-reboot -nographic -monitor telnet:127.0.0.1:1234,server,nowait -kernel main.bin
 ```
 
 Then, connect to the GDB server on QEMU with:
