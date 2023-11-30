@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <assert.h>
 
-#define ZEROMQ_SUB_ENDPOINT "tcp://localhost:5555"
+#define ZEROMQ_SUB_ENDPOINT "tcp://localhost:5556"
 
 int main (void) {
     void *context = zmq_ctx_new();
@@ -18,9 +18,14 @@ int main (void) {
     zmq_setsockopt(subscriber, ZMQ_SUBSCRIBE, "", 0);
 
     while (1) {
-        char buffer[10];
+        char buffer[100];
         int recv_size = zmq_recv(subscriber, buffer,
-                                10, ZMQ_DONTWAIT);
+                                100, ZMQ_DONTWAIT);
+        if (recv_size > 99) {
+            recv_size = 99;
+        }
+        // null-terminate the string
+        buffer[recv_size] = '\0';
         if (recv_size != -1) {
             printf("Received %s\n", buffer);
         } else {

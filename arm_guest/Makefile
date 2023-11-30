@@ -2,7 +2,7 @@ SRC_DIR := src
 BUILD_DIR := build
 
 ASFLAGS := -mcpu=arm926ej-s -g
-CFLAGS := -mcpu=arm926ej-s -g -O1
+CFLAGS := -mcpu=arm926ej-s -g -O1 -ffreestanding -nostdlib -nostartfiles
 LDFLAGS := -g -l:libgcc.a -L/usr/local/lib/gcc/arm-none-eabi/8.3.1/
 FINAL_LDFLAGS := -T src/linker.lds $(LDFLAGS)
 

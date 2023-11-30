@@ -7,3 +7,9 @@ void delay(const int seconds) {
         }
     }
 }
+
+void memset(void *buf, int val, int len) {
+    for (int i = 0; i < len; i++) {
+        ((char *)buf)[i] = val;
+    }
+}

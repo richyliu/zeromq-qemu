@@ -15,6 +15,11 @@
 int zmq_recv(char *buf, int len, int blocking);
 
 /**
+ * Sends a message to ZeroMQ via QEMU.
+ */
+void zmq_send(char *buf, int len);
+
+/**
  * Returns 1 if there is a message available, 0 otherwise.
  */
 int zmq_has_msg();
