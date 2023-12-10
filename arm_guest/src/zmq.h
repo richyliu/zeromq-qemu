@@ -24,5 +24,9 @@ void zmq_send(char *buf, int len);
  */
 int zmq_has_msg();
 
+/**
+ * Sets the filter for ZeroMQ message subscriptions.
+ */
+void zmq_set_filter(char *filter, int len);
 
 #endif // ZMQ_H_

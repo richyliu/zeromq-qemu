@@ -40,3 +40,15 @@ int zmq_has_msg() {
     int message_size = HW_ZMQ_MEM(0x0000);
     return message_size >= 0;
 }
+
+void zmq_set_filter(char *filter, int len) {
+    if (len > 128) {
+        len = 128;
+    }
+    // write filter
+    for (int i = 0; i < len; i++) {
+        HW_ZMQ_MEM8(0x80 + i) = filter[i];
+    }
+    // indicate write
+    HW_ZMQ_MEM(0x0010) = len;
+}

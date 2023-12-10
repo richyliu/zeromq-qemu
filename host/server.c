@@ -23,6 +23,11 @@ int main (void)
         sprintf(buf, "Hello %d", idx++);
         printf("Sending message: '%s'\n", buf);
         zmq_send(publisher, buf, strlen(buf), 0);
+
+        sprintf(buf, "ignoreme");
+        printf("Sending message: '%s'\n", buf);
+        zmq_send(publisher, buf, strlen(buf), 0);
+
         sleep(1);
     }
 

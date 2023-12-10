@@ -6,6 +6,7 @@
 
 void c_entry() {
     int i = 0;
+    zmq_set_filter("Hello", 5);
     while (1) {
         char buf[100];
         int len = zmq_recv(buf, 100, 0);
