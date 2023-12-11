@@ -1,0 +1,436 @@
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 3ada335a24..8f1db96053 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -32,6 +32,7 @@ config ARM_VIRT
+     select VIRTIO_MEM_SUPPORTED
+     select ACPI_CXL
+     select ACPI_HMAT
++    select ZEROMQ
+ 
+ config CHEETAH
+     bool
+diff --git a/hw/arm/versatilepb.c b/hw/arm/versatilepb.c
+index 2f22dc890f..c6b65701c8 100644
+--- a/hw/arm/versatilepb.c
++++ b/hw/arm/versatilepb.c
+@@ -27,6 +27,7 @@
+ #include "hw/sd/sd.h"
+ #include "qom/object.h"
+ #include "audio/audio.h"
++#include "hw/misc/zeromq.h"
+ 
+ #define VERSATILE_FLASH_ADDR 0x34000000
+ #define VERSATILE_FLASH_SIZE (64 * 1024 * 1024)
+@@ -288,6 +289,10 @@ static void versatile_init(MachineState *machine, int board_id)
+     pl011_create(0x101f3000, pic[14], serial_hd(2));
+     pl011_create(0x10009000, sic[6], serial_hd(3));
+ 
++    DeviceState *zeromq_dev;
++    zeromq_dev = qdev_new(TYPE_ZEROMQ);
++    sysbus_mmio_map(SYS_BUS_DEVICE(zeromq_dev), 0, 0x090c0000);
++
+     dev = qdev_new("pl080");
+     object_property_set_link(OBJECT(dev), "downstream", OBJECT(sysmem),
+                              &error_fatal);
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 0a16ab3095..866b585375 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -76,6 +76,7 @@
+ #include "hw/mem/pc-dimm.h"
+ #include "hw/mem/nvdimm.h"
+ #include "hw/acpi/generic_event_device.h"
++#include "hw/misc/zeromq.h"
+ #include "hw/virtio/virtio-md-pci.h"
+ #include "hw/virtio/virtio-iommu.h"
+ #include "hw/char/pl011.h"
+@@ -155,6 +156,7 @@ static const MemMapEntry base_memmap[] = {
+     [VIRT_NVDIMM_ACPI] =        { 0x09090000, NVDIMM_ACPI_IO_LEN},
+     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
+     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
++    [VIRT_ZEROMQ] =             { 0x090c0000, 0x00001000 },
+     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
+     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
+     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
+@@ -1045,6 +1047,15 @@ static void create_gpio_devices(const VirtMachineState *vms, int gpio,
+     }
+ }
+ 
++static void create_zeromq(const VirtMachineState *vms)
++{
++    DeviceState *dev;
++
++    dev = qdev_new(TYPE_ZEROMQ);
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
++    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, vms->memmap[VIRT_ZEROMQ].base);
++}
++
+ static void create_virtio_devices(const VirtMachineState *vms)
+ {
+     int i;
+@@ -2295,6 +2306,8 @@ static void machvirt_init(MachineState *machine)
+         create_gpio_devices(vms, VIRT_SECURE_GPIO, secure_sysmem);
+     }
+ 
++    create_zeromq(vms);
++
+      /* connect powerdown request */
+      vms->powerdown_notifier.notify = virt_powerdown_req;
+      qemu_register_powerdown_notifier(&vms->powerdown_notifier);
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index cc8a8c1418..4bd2eff6cd 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -200,4 +200,7 @@ config IOSB
+ config XLNX_VERSAL_TRNG
+     bool
+ 
++config ZEROMQ
++    bool
++
+ source macio/Kconfig
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 36c20d5637..1cb4aa96d0 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -154,3 +154,5 @@ system_ss.add(when: 'CONFIG_SBSA_REF', if_true: files('sbsa_ec.c'))
+ 
+ # HPPA devices
+ system_ss.add(when: 'CONFIG_LASI', if_true: files('lasi.c'))
++
++system_ss.add(when: 'CONFIG_ZEROMQ', if_true: files('zeromq.c'))
+diff --git a/hw/misc/zeromq.c b/hw/misc/zeromq.c
+new file mode 100644
+index 0000000000..1d83d51c38
+--- /dev/null
++++ b/hw/misc/zeromq.c
+@@ -0,0 +1,256 @@
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "migration/vmstate.h"
++#include "hw/sysbus.h"
++#include "hw/qdev-properties.h"
++#include "qom/object.h"
++#include "trace.h"
++#include "qapi/error.h"
++#include "hw/misc/zeromq.h"
++#include <zmq.h>
++
++/* #define ZEROMQ_DEBUG */
++
++/**
++ * Zeromq interface for Halucinator
++ *
++ * Main implemented features:
++ * - pub/sub
++ *
++ * Overall architecture:
++ * - on startup, create a zeromq context for pub and another for sub
++ * - pass receives from sub to the guest
++ * - guest reads data from mmio region
++ * - allow guest to send to pub
++ * - guest writes data to mmio region
++ * - NOTE: large messages will be truncated silently
++ *
++ * MMIO Layout:
++ * Read:
++ * - +0x0000: (int32) query for message, return size (-1 if no message)
++ * - +0x0100: (any) first byte of least recent message
++ * - ...
++ * - +0x02ff: (any) last byte of least recent message
++ * Write:
++ * - +0x0008: (int32) send message with size (synchronous)
++ * - +0x000c: (any) indicates that message has been read
++ * - +0x0010: (int32) subscribe to filter prefix in buffer of given length and clear buffer
++ * - +0x0080: (any) first byte of subscribe filter prefix buffer
++ * - ...
++ * - +0x00ff: (any) last byte of subscribe filter prefix buffer
++ * - +0x0100: (any) first byte of send buffer
++ * - ...
++ * - +0x02ff: (any) last byte of send buffer
++ */
++
++static void zeromq_recv_message(ZeromqState *s)
++{
++    // try to receive a message
++    // NOTE: ZMQ_DONTWAIT is important here, otherwise the guest will hang
++    //       waiting for a message
++    int recv_size = zmq_recv(s->subscriber, s->zeromq_msg,
++                            ZEROMQ_MAX_MSG_SIZE, ZMQ_DONTWAIT);
++    if (recv_size >= 0) {
++#ifdef ZEROMQ_DEBUG
++        printf("zeromq: received %d bytes\n", recv_size);
++        printf("zeromq: message first 8 bytes: ");
++        for (int i = 0; i < 8; i++) {
++            printf("%02x ", zeromq_msg[zeromq_cur_msg][i]);
++        }
++        printf("\n");
++#endif // ZEROMQ_DEBUG
++        if (recv_size > ZEROMQ_MAX_MSG_SIZE) {
++            printf("zeromq: received message larger than buffer, truncating\n");
++            recv_size = ZEROMQ_MAX_MSG_SIZE;
++        }
++        s->zeromq_msg_size = recv_size;
++    }
++}
++
++static void zeromq_send_message(ZeromqState *s, int send_size)
++{
++    // send message
++    if (send_size > ZEROMQ_MAX_SEND_SIZE) {
++        printf("zeromq: message larger than buffer, truncating\n");
++        send_size = ZEROMQ_MAX_SEND_SIZE;
++    }
++    zmq_send(s->publisher, s->zeromq_send, send_size, 0);
++}
++
++static uint64_t zeromq_mmio_read(void *opaque, hwaddr addr, unsigned size)
++{
++#ifdef ZEROMQ_DEBUG
++    printf("zeromq: read addr=0x%" PRIx64 " size=%d\n", addr, size);
++#endif // ZEROMQ_DEBUG
++
++    ZeromqState *s = ZEROMQ(opaque);
++    uint64_t offset = addr;
++
++    // handle commands
++    switch (offset) {
++    case 0x0000:
++        // query size of message
++        if (s->zeromq_msg_size < 0) {
++            zeromq_recv_message(s);
++        }
++        return s->zeromq_msg_size;
++    }
++
++    // handle buffer reads
++    if (offset >= 0x0100 && offset < 0x0300) {
++        // read from the current message the number of bytes requested
++        int msg_offset = offset - 0x0100;
++        char *msg_loc = &s->zeromq_msg[msg_offset];
++        switch (size) {
++        case 1:
++            return *(uint8_t *)msg_loc;
++        case 2:
++            return *(uint16_t *)msg_loc;
++        case 4:
++            return *(uint32_t *)msg_loc;
++        case 8:
++            return *(uint64_t *)msg_loc;
++        default:
++            // should never happen, raise an error
++            error_report("zeromq: invalid read size %d", size);
++        }
++    }
++
++    // if we get here, the offset is invalid
++    printf("zeromq: invalid read offset 0x%" PRIx64 "\n", offset);
++    return 0;
++}
++
++static void zeromq_mmio_write(void *opaque, hwaddr addr, uint64_t val,
++                unsigned size)
++{
++#ifdef ZEROMQ_DEBUG
++    printf("zeromq: write addr=0x%" PRIx64 " val=0x%" PRIx64 " size=%d\n", addr,
++           val, size);
++#endif // ZEROMQ_DEBUG
++
++    ZeromqState *s = ZEROMQ(opaque);
++
++    switch (addr) {
++    case 0x0008:
++        // send message
++        zeromq_send_message(s, val);
++        return;
++    case 0x000c:
++        // move on to next message
++        s->zeromq_msg_size = -1;
++        return;
++    case 0x0010:
++        // subscribe to filter prefix
++        if (val > ZEROMQ_MAX_FILTER_SIZE) {
++            printf("zeromq: filter prefix larger than buffer, truncating\n");
++            val = ZEROMQ_MAX_FILTER_SIZE;
++        }
++        s->zeromq_filter_prefix[val] = '\0';
++        zmq_setsockopt(s->subscriber, ZMQ_SUBSCRIBE, s->zeromq_filter_prefix,
++                       val);
++        memset(s->zeromq_filter_prefix, 0, ZEROMQ_MAX_FILTER_SIZE + 1);
++        return;
++    }
++
++    // handle buffer writes
++
++    if (addr >= 0x0080 && addr < 0x0100) {
++        // write to the filter prefix buffer the number of bytes requested
++        int msg_offset = addr - 0x0080;
++        char *msg_loc = &s->zeromq_filter_prefix[msg_offset];
++        switch (size) {
++        case 1:
++            *(uint8_t *)msg_loc = val;
++            break;
++        case 2:
++            *(uint16_t *)msg_loc = val;
++            break;
++        case 4:
++            *(uint32_t *)msg_loc = val;
++            break;
++        case 8:
++            *(uint64_t *)msg_loc = val;
++            break;
++        default:
++            // should never happen, raise an error
++            error_report("zeromq: invalid write size %d", size);
++        }
++        return;
++    }
++
++    if (addr >= 0x0100 && addr < 0x0300) {
++        // write to the send buffer the number of bytes requested
++        int msg_offset = addr - 0x0100;
++        char *msg_loc = &s->zeromq_send[msg_offset];
++        switch (size) {
++        case 1:
++            *(uint8_t *)msg_loc = val;
++            break;
++        case 2:
++            *(uint16_t *)msg_loc = val;
++            break;
++        case 4:
++            *(uint32_t *)msg_loc = val;
++            break;
++        case 8:
++            *(uint64_t *)msg_loc = val;
++            break;
++        default:
++            // should never happen, raise an error
++            error_report("zeromq: invalid write size %d", size);
++        }
++    }
++}
++
++static const MemoryRegionOps zeromq_mmio_ops = {
++    .read = zeromq_mmio_read,
++    .write = zeromq_mmio_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .impl = {
++        .min_access_size = 4,
++        .max_access_size = 8,
++    },
++
++};
++
++static void zeromq_init(Object *obj)
++{
++    ZeromqState *s = ZEROMQ(obj);
++    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
++
++    memory_region_init_io(&s->mmio, obj, &zeromq_mmio_ops, s, "zeromq", 1024);
++    sysbus_init_mmio(sbd, &s->mmio);
++
++    printf("zeromq: initializing zeromq context\n");
++
++    void *pub_context = zmq_ctx_new();
++    s->publisher = zmq_socket(pub_context, ZMQ_PUB);
++    zmq_bind(s->publisher, ZEROMQ_PUB_ENDPOINT);
++
++    void *sub_context = zmq_ctx_new();
++    s->subscriber = zmq_socket(sub_context, ZMQ_SUB);
++    int ret = zmq_connect(s->subscriber, ZEROMQ_SUB_ENDPOINT);
++    if (ret != 0) {
++        printf("zmq_connect failed\n");
++    }
++
++    s->zeromq_msg_size = -1;
++    memset(s->zeromq_msg, 0, ZEROMQ_MAX_MSG_SIZE);
++    memset(s->zeromq_send, 0, ZEROMQ_MAX_SEND_SIZE);
++    memset(s->zeromq_filter_prefix, 0, ZEROMQ_MAX_FILTER_SIZE + 1);
++}
++
++static const TypeInfo zeromq_info = {
++    .name = TYPE_ZEROMQ,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(ZeromqState),
++    .instance_init = zeromq_init,
++};
++
++static void zeromq_register_types(void)
++{
++    type_register_static(&zeromq_info);
++}
++
++type_init(zeromq_register_types);
+diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
+index f69239850e..b1b87d5393 100644
+--- a/include/hw/arm/virt.h
++++ b/include/hw/arm/virt.h
+@@ -72,6 +72,7 @@ enum {
+     VIRT_SECURE_UART,
+     VIRT_SECURE_MEM,
+     VIRT_SECURE_GPIO,
++    VIRT_ZEROMQ,
+     VIRT_PCDIMM_ACPI,
+     VIRT_ACPI_GED,
+     VIRT_NVDIMM_ACPI,
+diff --git a/include/hw/misc/zeromq.h b/include/hw/misc/zeromq.h
+new file mode 100644
+index 0000000000..5679f5e1ac
+--- /dev/null
++++ b/include/hw/misc/zeromq.h
+@@ -0,0 +1,34 @@
++#ifndef HW_ZEROMQ_H
++#define HW_ZEROMQ_H
++
++#include "qom/object.h"
++
++#define ZEROMQ_PUB_ENDPOINT "tcp://localhost:5556"
++/* #define ZEROMQ_SUB_ENDPOINT "ipc:///tmp/IoServer2Halucinator0" */
++#define ZEROMQ_SUB_ENDPOINT "tcp://localhost:5555"
++
++#define ZEROMQ_MAX_MSG_SIZE 512
++#define ZEROMQ_MAX_SEND_SIZE 512
++#define ZEROMQ_MAX_FILTER_SIZE 128
++
++struct ZeromqState {
++    SysBusDevice parent_obj;
++
++    MemoryRegion mmio;
++
++    void *publisher;
++    void *subscriber;
++
++    // buffer for messages received from zeromq
++    char zeromq_msg[ZEROMQ_MAX_MSG_SIZE];
++    int zeromq_msg_size;
++    // buffer for message to be sent to zeromq
++    char zeromq_send[ZEROMQ_MAX_SEND_SIZE];
++
++    char zeromq_filter_prefix[ZEROMQ_MAX_FILTER_SIZE + 1];
++};
++
++#define TYPE_ZEROMQ "zeromq"
++OBJECT_DECLARE_SIMPLE_TYPE(ZeromqState, ZEROMQ);
++
++#endif
+diff --git a/meson.build b/meson.build
+index 4848930680..2221483979 100644
+--- a/meson.build
++++ b/meson.build
+@@ -3411,12 +3411,14 @@ event_loop_base = declare_dependency(link_whole: event_loop_base,
+ 
+ stub_ss = stub_ss.apply(config_all, strict: false)
+ 
++zeromq = cc.find_library('zmq', required: true)
++
+ util_ss.add_all(trace_ss)
+ util_ss = util_ss.apply(config_all, strict: false)
+ libqemuutil = static_library('qemuutil',
+                              build_by_default: false,
+                              sources: util_ss.sources() + stub_ss.sources() + genh,
+-                             dependencies: [util_ss.dependencies(), libm, threads, glib, socket, malloc, pixman])
++                             dependencies: [util_ss.dependencies(), libm, threads, glib, socket, malloc, pixman, zeromq])
+ qemuutil = declare_dependency(link_with: libqemuutil,
+                               sources: genh + version_res,
+                               dependencies: [event_loop_base])
