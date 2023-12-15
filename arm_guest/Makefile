@@ -3,24 +3,27 @@ BUILD_DIR := build
 
 ASFLAGS := -mcpu=arm926ej-s -g
 CFLAGS := -mcpu=arm926ej-s -g -O1 -ffreestanding -nostdlib -nostartfiles
-LDFLAGS := -g -l:libgcc.a -L/usr/local/lib/gcc/arm-none-eabi/8.3.1/
-FINAL_LDFLAGS := -T src/linker.lds $(LDFLAGS)
+LDFLAGS := -g -l:libgcc.a -L/usr/local/lib/gcc/arm-none-eabi/8.3.1/ -T src/linker.lds
 
 SOURCES := $(wildcard src/*.c)
 # objects are built from sources by replacing the .c extension with .o and replacing the src/ prefix with build/
 OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
 
+ASMSOURCE := $(wildcard src/*.S)
+ASMOBJECTS := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASMSOURCE))
+
 all: build/main.bin
 
-build/main.o: $(OBJECTS)
-	arm-none-eabi-ld $(LDFLAGS) -r -o $@ $^
+build/main.elf: $(ASMOBJECTS) $(OBJECTS)
+	arm-none-eabi-ld -o $@ $^ $(LDFLAGS)
 
 build/%.o: src/%.c
 	arm-none-eabi-gcc $(CFLAGS) -c -o $@ $<
 
-build/main.bin: build/main.o src/startup.S src/linker.lds
-	arm-none-eabi-as $(ASFLAGS) -o src/startup.o src/startup.S
-	arm-none-eabi-ld -o build/main.elf src/startup.o build/main.o $(FINAL_LDFLAGS)
+build/%.o: src/%.S
+	arm-none-eabi-as $(ASFLAGS) -o $@ $<
+
+build/main.bin: build/main.elf
 	arm-none-eabi-objcopy -O binary build/main.elf build/main.bin
 
 clean:
