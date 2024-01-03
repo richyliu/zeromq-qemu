@@ -12,20 +12,20 @@ OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
 ASMSOURCE := $(wildcard src/*.S)
 ASMOBJECTS := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASMSOURCE))
 
-all: build/main.bin
+all: $(BUILD_DIR)/main.bin
 
-build/main.elf: $(ASMOBJECTS) $(OBJECTS)
+$(BUILD_DIR)/main.elf: $(ASMOBJECTS) $(OBJECTS)
 	arm-none-eabi-ld -o $@ $^ $(LDFLAGS)
 
-build/%.o: src/%.c
+$(BUILD_DIR)/%.o: src/%.c
 	arm-none-eabi-gcc $(CFLAGS) -c -o $@ $<
 
-build/%.o: src/%.S
+$(BUILD_DIR)/%.o: src/%.S
 	arm-none-eabi-as $(ASFLAGS) -o $@ $<
 
-build/main.bin: build/main.elf
-	arm-none-eabi-objcopy -O binary build/main.elf build/main.bin
+$(BUILD_DIR)/main.bin: $(BUILD_DIR)/main.elf
+	arm-none-eabi-objcopy -O binary $(BUILD_DIR)/main.elf $(BUILD_DIR)/main.bin
 
 clean:
-	rm -f build/*.o
-	rm -f build/main.bin build/main.elf
+	rm -f $(BUILD_DIR)/*.o
+	rm -f $(BUILD_DIR)/main.bin $(BUILD_DIR)/main.elf

@@ -1,11 +1,9 @@
     .text
     .code 32
 
-    .global _entry
-    .global vectors_start
-    .global vectors_end
-
-vectors_start:
+    .section .vector_table, "ax"
+    .global _Reset
+_Reset:
     LDR PC, reset_handler_addr
     LDR PC, undef_handler_addr
     LDR PC, swi_handler_addr
@@ -23,14 +21,11 @@ data_abort_handler_addr: .word data_abort_handler
 irq_handler_addr: .word irq_handler
 fiq_handler_addr: .word fiq_handler
 
-vectors_end:
+    .section .text
 
-_entry:
 reset_handler:
     /* set Supervisor stack */
     LDR sp, =stack_top
-    /* copy vector table to address 0 */
-    BL copy_vectors
     /* get Program Status Register */
     MRS r0, cpsr
     /* go in IRQ mode */

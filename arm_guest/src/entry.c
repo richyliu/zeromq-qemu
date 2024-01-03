@@ -5,8 +5,13 @@
 #include "zmq.h"
 #include "exceptions.h"
 
+// test .bss
+char test_buf[256];
+// test .data
+int test_data = 0xdeadbeef;
+
 void c_entry() {
-    /* printf("[GUEST]: started\n"); */
+    printf("[GUEST]: started\n");
     puts("[GUEST]: started");
 
     // test irq handling
@@ -14,7 +19,7 @@ void c_entry() {
     VIC_INTENABLE(0xff);
 
     for (int i = 0; ; i++) {
-        /* printf("[GUEST]: test, counter=%d\n", i); */
+        printf("[GUEST]: test, counter=%d\n", i);
         puts("a");
         HW_ZMQ_MEM8(0x11) = 1;
         delay(500);

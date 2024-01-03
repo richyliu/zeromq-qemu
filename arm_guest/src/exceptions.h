@@ -13,6 +13,4 @@ void __attribute__((interrupt)) data_abort_handler();
 void __attribute__((interrupt)) irq_handler();
 void __attribute__((interrupt)) fiq_handler();
 
-void copy_vectors();
-
 #endif // EXCEPTIONS_H_
